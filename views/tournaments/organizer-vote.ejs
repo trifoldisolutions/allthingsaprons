@@ -1,0 +1,14 @@
+<%- include('../partials/appStart', { title: title, activePage: 'tournaments' }) %>
+
+<%- include('../partials/tieBreakPicker', {
+  tournamentId:   tournament._id,
+  matchId:        match._id,
+  entryA:         entryA,
+  entryB:         entryB,
+  headerTitle:    'Break the Tie',
+  bodyText:       'The jury couldn\'t reach a majority in time. As organizer, your vote decides this match.',
+  endpoint:       'organizer-vote',
+  successMessage: 'Your decision has been recorded.',
+}) %>
+
+<%- include('../partials/appEnd') %>
