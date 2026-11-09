@@ -186,7 +186,7 @@ async function seedOrganizerEligibility(userId, { followerCount = 260, contribut
 // Replicates the `open_tournament_match` agenda job body (jobs/tournamentJobs.js) — that job
 // has no exported standalone function, unlike every other tournament job handler, so a
 // deadline-driven round can't be forced without duplicating its logic here. See the simulation
-// report (plans/July/tournament-simulation-report.md, section 5) for the writeup of this gap.
+// report (dev_resources/plans/July/tournament-simulation-report.md, section 5) for the writeup of this gap.
 async function forceOpenMatch(matchId) {
   const match = await TournamentMatch.findOneAndUpdate(
     { _id: matchId, status: 'scheduled' },

@@ -3,3 +3,4 @@ node_modules/
 public/css/output.css
 .claude/
 *.vbs
+dev_resources/
