@@ -1,17 +1,17 @@
-const Contest             = require('../models/Contest');
-const ContestVote         = require('../models/ContestVote');
-const ContestContribution = require('../models/ContestContribution');
-const ContestPayout       = require('../models/ContestPayout');
-const Nomination          = require('../models/Nomination');
-const Notification        = require('../models/Notification');
-const User                = require('../models/User');
-const TournamentMatch     = require('../models/TournamentMatch');
-const TournamentEntry     = require('../models/TournamentEntry');
-const notifyLoopedIn      = require('../utils/notifyLoopedIn');
-const notifyEntryLoopedIn = require('../utils/tournamentEntryLoop');
+const Contest             = require('../../models/Contest');
+const ContestVote         = require('../../models/ContestVote');
+const ContestContribution = require('../../models/ContestContribution');
+const ContestPayout       = require('../../models/ContestPayout');
+const Nomination          = require('../../models/Nomination');
+const Notification        = require('../../models/Notification');
+const User                = require('../../models/User');
+const TournamentMatch     = require('../../models/TournamentMatch');
+const TournamentEntry     = require('../../models/TournamentEntry');
+const notifyLoopedIn      = require('../notifyLoopedIn');
+const notifyEntryLoopedIn = require('../tournamentEntryLoop');
 
 // Notifies anyone looped in on either of this match's two TournamentEntry docs (see
-// utils/tournamentEntryLoop.js) — a no-op for standalone (non-tournament) contests.
+// services/tournamentEntryLoop.js) — a no-op for standalone (non-tournament) contests.
 async function notifyEntryLoopedInOnClose(contest, winnerEntryId) {
   if (!contest.tournamentId) return;
 
@@ -173,7 +173,7 @@ async function closeContest(contestId) {
             status:                'completed',
             paidAt:                now,
           }),
-          require('../models/WalletTransaction').create({
+          require('../../models/WalletTransaction').create({
             userId:        r.beneficiaryId,
             type:          'contest_payout_settled',
             direction:     'credit',

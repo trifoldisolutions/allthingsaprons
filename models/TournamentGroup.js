@@ -6,7 +6,7 @@ const tournamentGroupSchema = new mongoose.Schema({
   memberIds:    [{ type: mongoose.Schema.Types.ObjectId, ref: 'TournamentEntry' }],
   status:       { type: String, enum: ['active', 'complete'], default: 'active' },
 
-  // 3+-way boundary tie resolution (jobs/tournamentJobs.js's resolveGroup/resolveGroupTieCluster)
+  // 3+-way boundary tie resolution (services/jobs/tournamentJobs.js's resolveGroup/resolveGroupTieCluster)
   // — mirrors TournamentMatch's tieStatus/tieDeadline/juryNotifiedAt fields, but for a group's
   // ranking dispute rather than a single H2H match result.
   tieStatus:          { type: String, enum: ['jury_pending', 'organizer_pending', 'resolved'], default: null },

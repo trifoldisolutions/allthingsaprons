@@ -1,3 +1,7 @@
+const express = require('express');
+
+// ── Careers page and job applications ─────────────────────────────────────
+function careersRoutes() {
 const express          = require('express');
 const router           = express.Router();
 const { Resend }       = require('resend');
@@ -11,7 +15,7 @@ function getResend() {
 }
 
 router.get('/', (req, res) => {
-  res.render('careers', {
+  res.render('public/careers', {
     title:     'Join the Team',
     submitted: req.query.submitted === '1',
     error:     null,
@@ -25,12 +29,12 @@ router.post('/', async (req, res) => {
   const message = (req.body.message || '').trim().slice(0, 3000);
 
   if (!name || !email || !message) {
-    return res.render('careers', { title: 'Join the Team', submitted: false, error: 'Please fill in all required fields.' });
+    return res.render('public/careers', { title: 'Join the Team', submitted: false, error: 'Please fill in all required fields.' });
   }
 
   const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRx.test(email)) {
-    return res.render('careers', { title: 'Join the Team', submitted: false, error: 'Please enter a valid email address.' });
+    return res.render('public/careers', { title: 'Join the Team', submitted: false, error: 'Please enter a valid email address.' });
   }
 
   try {
@@ -53,8 +57,20 @@ router.post('/', async (req, res) => {
     res.redirect('/careers?submitted=1');
   } catch (err) {
     console.error(err);
-    res.render('careers', { title: 'Join the Team', submitted: false, error: 'Something went wrong. Please try again.' });
+    res.render('public/careers', { title: 'Join the Team', submitted: false, error: 'Something went wrong. Please try again.' });
   }
 });
+
+return router;
+}
+
+const router = express.Router();
+
+router.use('/careers', careersRoutes());
+
+router.routes = [
+  { method: 'GET', path: '/careers', label: 'Careers page' },
+  { method: 'POST', path: '/careers', label: 'Apply for a job' },
+];
 
 module.exports = router;

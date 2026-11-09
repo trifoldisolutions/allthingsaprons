@@ -1,8 +1,8 @@
 const { Resend }      = require('resend');
-const User            = require('../models/User');
-const MonthlySnapshot = require('../models/MonthlySnapshot');
-const WalletTransaction = require('../models/WalletTransaction');
-const Notification    = require('../models/Notification');
+const User            = require('../../models/User');
+const MonthlySnapshot = require('../../models/MonthlySnapshot');
+const WalletTransaction = require('../../models/WalletTransaction');
+const Notification    = require('../../models/Notification');
 
 const FROM_EMAIL    = process.env.FROM_EMAIL || 'noreply@allthingsaprons.com';
 const EXCHANGE_RATE = 0.20;

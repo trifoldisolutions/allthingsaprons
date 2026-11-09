@@ -20,6 +20,47 @@
 - `npm start`: Starts the server without nodemon.
 - `npm run build:css`: Builds the minified CSS once.
 
+## File and Folder Structure
+**Hard rule:** Whenever you create, move or edit files, follow this layout. Put new code where it says, even if the project doesn't have that folder yet. If something has no place here, ask before adding a new top-level folder. Don't move existing files as a side effect of other work unless the user asks.
+
+```
+allthingsaprons/
+├── server.js            App setup, facades list, startup route map
+├── AGENTS.md
+├── package.json, .env, .gitignore, README.md, allthingsaprons.vbs
+├── .vscode/tasks.json   Runs `npm run tw` and `npm run dev` on folder open
+├── models/              Mongoose models, one per file
+├── routes/
+│   ├── public.js        Public pages, mounted at /
+│   ├── app.js           The app and its sign-in pages, mounted at /
+│   ├── admin.js         Admin section, mounted at /admin
+│   └── api.js           JSON API, mounted at /api
+├── middleware/          Express middleware: sign-in and role checks, uploads, data for the app's side panels
+├── services/            Shared logic: wallet, scoring, affinity, tournaments, audit log
+│   └── jobs/            Agenda background jobs
+├── views/
+│   ├── partials/        Shared by every section: head.ejs, toasts.ejs
+│   ├── public/          Public pages
+│   ├── app/             App pages, with sign-in pages in app/auth/ and its own partials in app/partials/
+│   └── admin/           Admin pages, with its own partials in admin/partials/
+├── src/input.css        Tailwind source, the only CSS file to edit
+├── public/
+│   ├── output.css       Built by Tailwind: never edit or commit it
+│   ├── assets/          Logos and images the site shows, served at /assets
+│   ├── wasm/            FFmpeg browser files for video, served at /wasm
+│   └── uploads/         Git-ignored user uploads, served at /uploads
+├── scripts/             Scripts run by hand
+└── dev_resources/       Git-ignored and internal: journal, tasks, commit message, plans
+```
+
+- **Routes:** Add each route to its section's file, with a line in that router's `router.routes` list (`{ method, path, label }`). No routes in `server.js`, and no new route file per feature. Logic that several routes share, or that calls an outside service, goes in `services/`.
+- **Route order:** The mount order in `server.js` and `routes/app.js` is part of how the app behaves, so don't change it. `followRoutes()` in `routes/app.js` starts with `requireAuth` and `requireApproved` on every path, so everything after it requires a sign-in, including the whole API. The `signIn` router, `routes/public.js` and `routes/admin.js` come before that gate.
+- **Parts of a section:** In `routes/public.js`, `routes/app.js` and `routes/admin.js`, each part is a function with its own router and scope. Add a route to the part it belongs to. The code inside these functions isn't indented, so multi-line strings stay as they were.
+- **Folder names:** No `utils/`, `lib/` or `helpers/`. Helpers go in `services/`, or in `middleware/` if they handle a request.
+- **Views:** Every page goes in its section's folder, never directly in `views/`. The folder already says the section, so name files for what they show: `views/admin/users.ejs`, not `views/admin-users.ejs`.
+- **Local-only files:** Notes, screenshots, logs, prompts, one-off scripts and source images go in `dev_resources/`, not the project root.
+- **Instruction files:** `AGENTS.md` is the only one. No `CLAUDE.md` or `.claude/` folder.
+
 ---
 
 ## Core Domain Concepts
@@ -117,24 +158,24 @@ All collections are in MongoDB. Key relationships:
 ### server.js — Keep It Lean
 `server.js` is the entry point only. It should contain:
 - Middleware setup
-- Route mounting
+- The facades list and startup route map
 - DB connection
 - Server initialization
 
 **Never bloat `server.js` with inline route logic, business logic, or feature-specific code.**
 
 When implementing any feature, ask:
-> "Does this belong in server.js, or should it live in its own route/controller/middleware file?"
+> "Does this belong in server.js, or in a route, service or middleware file?"
 
-If a feature introduces new routes or logic → create a new file under the appropriate folder (e.g. `routes/`, `controllers/`, `middleware/`) and mount/import it in `server.js`.
+If a feature introduces new routes or logic → put it where File and Folder Structure says: routes in their section's file in `routes/`, shared logic in `services/`, request handling in `middleware/`.
 
 ---
 
 ### Views & Partials — Evaluate Before Creating
-Before adding any `.ejs` file, check the existing `views/` and `views/partials/` structure.
+Before adding any `.ejs` file, check the existing `views/` structure, including its `partials/` folders.
 
-- If a UI element is **reusable** → create or update a partial in `views/partials/`
-- If it's a **new page** → create a new view file in the appropriate `views/` subfolder
+- If a UI element is **reusable** → create or update a partial in its section's `partials/` folder, or in `views/partials/` if every section shares it
+- If it's a **new page** → create a new view file in its section's folder: `views/public/`, `views/app/` or `views/admin/`
 - If it **extends an existing page** → update the existing view file
 
 Do not dump new markup into existing views without checking if a partial already covers it.
@@ -145,9 +186,9 @@ Do not dump new markup into existing views without checking if a partial already
 Whenever rendering a user's pfp/avatar and no image is set, the fallback must be a `bg-charm-950` circle with a `boxicons:user-filled` icon colored `#e680a6` (charm-400) — never a generic gray/`shark`/`zinc` circle, the light `charm-200` variant, `boxicons:user` (outline), or a `/img/default-avatar.png`-style file reference (no such file exists).
 
 - Server-rendered (EJS): `<div class="{size} rounded-full bg-charm-950 flex items-center justify-center"><iconify-icon icon="boxicons:user-filled" width="{n}" style="color:#e680a6"></iconify-icon></div>`
-- Client-built (JS string concatenation): use the shared helper `window.ataAvatarHtml(src, sizeCls, iconSize)` from `views/partials/avatarJsHelpers.ejs` (include it on the page if not already present) instead of hand-rolling another fallback.
-- **Exception:** the admin panel (`views/admin/**`, `views/partials/adminSidebar.ejs`) intentionally uses its own separate monochrome theme (gray `zinc-800` squares, gray icon) — do not apply the charm/pink treatment there.
-- Also exempt: notification actor-icon fallbacks in `views/notifications.ejs`, which fall back to a notification-type glyph (trophy, compare, etc.), not a "no pfp" placeholder.
+- Client-built (JS string concatenation): use the shared helper `window.ataAvatarHtml(src, sizeCls, iconSize)` from `views/app/partials/avatarJsHelpers.ejs` (include it on the page if not already present) instead of hand-rolling another fallback.
+- **Exception:** the admin panel (`views/admin/**`, including `views/admin/partials/adminSidebar.ejs`) intentionally uses its own separate monochrome theme (gray `zinc-800` squares, gray icon) — do not apply the charm/pink treatment there.
+- Also exempt: notification actor-icon fallbacks in `views/app/notifications.ejs`, which fall back to a notification-type glyph (trophy, compare, etc.), not a "no pfp" placeholder.
 
 ---
 

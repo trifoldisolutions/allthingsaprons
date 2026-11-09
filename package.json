@@ -5,9 +5,9 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
-    "tw": "npx @tailwindcss/cli -i ./src/input.css -o ./public/css/output.css --watch=always",
+    "tw": "npx @tailwindcss/cli -i ./src/input.css -o ./public/output.css --watch=always",
     "start": "node server.js",
-    "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./public/css/output.css --minify"
+    "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./public/output.css --minify"
   },
   "keywords": [],
   "author": "",

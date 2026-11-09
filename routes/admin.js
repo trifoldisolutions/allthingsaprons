@@ -1,3 +1,420 @@
+// Each function below holds one part of this section, with its own router and its own scope, so names
+// can repeat between parts and a part's middleware stays on its own routes. The code inside isn't
+// indented, so multi-line strings stay as they were.
+
+// ── Own admin profile ─────────────────────────────────────────────────────
+function profileRoutes() {
+const express = require('express');
+const router  = express.Router();
+const bcrypt  = require('bcrypt');
+const User    = require('../models/User');
+const upload  = require('../middleware/upload');
+
+// GET /admin/profile
+router.get('/', async (req, res) => {
+  try {
+    const user = await User.findById(req.session.adminId)
+      .select('displayName email avatar role permissions createdAt isTemporary temporaryUntil accountStatus')
+      .lean();
+    if (!user) return res.redirect('/admin/login');
+
+    res.render('admin/profile', { title: 'My Profile', currentPage: 'profile', user });
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin');
+  }
+});
+
+// POST /admin/profile/display-name
+router.post('/display-name', async (req, res) => {
+  try {
+    const name = (req.body.displayName || '').trim().slice(0, 50);
+    if (!name) return res.redirect('/admin/profile?error=name_empty');
+
+    await User.findByIdAndUpdate(req.session.adminId, {
+      $set:  { 'displayName.value': name },
+      $push: { 'displayName.history': { value: name, setAt: new Date(), source: 'profile' } },
+    });
+
+    req.session.adminDisplayName = name;
+    res.redirect('/admin/profile?success=name');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin/profile?error=name_failed');
+  }
+});
+
+// POST /admin/profile/avatar
+router.post('/avatar', upload.avatar.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) return res.redirect('/admin/profile?error=avatar_missing');
+
+    const filePath = '/uploads/avatars/' + req.file.filename;
+    await User.findByIdAndUpdate(req.session.adminId, {
+      $set:  { 'avatar.value': filePath },
+      $push: { 'avatar.history': { value: filePath, setAt: new Date(), source: 'profile' } },
+    });
+
+    req.session.adminAvatar = filePath;
+    res.redirect('/admin/profile?success=avatar');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin/profile?error=avatar_failed');
+  }
+});
+
+// POST /admin/profile/password
+router.post('/password', async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.redirect('/admin/profile?error=password_missing');
+    }
+    if (newPassword !== confirmPassword) {
+      return res.redirect('/admin/profile?error=password_match');
+    }
+    if (newPassword.length < 8) {
+      return res.redirect('/admin/profile?error=password_length');
+    }
+
+    const user = await User.findById(req.session.adminId).select('password');
+    if (!user) return res.redirect('/admin/login');
+
+    const valid = await bcrypt.compare(currentPassword, user.password);
+    if (!valid) return res.redirect('/admin/profile?error=password_wrong');
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await User.findByIdAndUpdate(req.session.adminId, { password: hash });
+
+    res.redirect('/admin/profile?success=password');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin/profile?error=password_failed');
+  }
+});
+
+return router;
+}
+
+// ── Support inbox ─────────────────────────────────────────────────────────
+function supportRoutes() {
+const express        = require('express');
+const router         = express.Router();
+const { Resend }     = require('resend');
+const User           = require('../models/User');
+const SupportThread  = require('../models/SupportThread');
+const SupportMessage = require('../models/SupportMessage');
+const upload = require('../middleware/upload');
+
+const FROM_EMAIL   = process.env.FROM_EMAIL || 'noreply@allthingsaprons.com';
+const { TOPIC_LABELS } = SupportThread;
+
+function getResend() {
+  if (!process.env.RESEND_API_KEY) return null;
+  return new Resend(process.env.RESEND_API_KEY);
+}
+
+// GET /admin/support — render messenger UI
+router.get('/', (req, res) => {
+  res.render('admin/support', { title: 'Messages', currentPage: 'support' });
+});
+
+// GET /admin/support/threads — list all threads with last message + unread count
+router.get('/threads', async (req, res) => {
+  try {
+    const threads = await SupportThread.find()
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    const threadIds = threads.map(t => t._id);
+    const userIds   = [...new Set(threads.map(t => String(t.userId)))];
+
+    const [lastMessages, unreadCounts, users] = await Promise.all([
+      SupportMessage.aggregate([
+        { $match: { threadId: { $in: threadIds } } },
+        { $sort: { createdAt: -1 } },
+        { $group: { _id: '$threadId', lastMessage: { $first: '$$ROOT' } } },
+      ]),
+      SupportMessage.aggregate([
+        { $match: { threadId: { $in: threadIds }, from: 'user', readBySupport: false } },
+        { $group: { _id: '$threadId', count: { $sum: 1 } } },
+      ]),
+      User.find({ _id: { $in: userIds } }).select('username displayName avatar email').lean(),
+    ]);
+
+    const lastMsgMap = {};
+    lastMessages.forEach(m => { lastMsgMap[String(m._id)] = m.lastMessage; });
+    const unreadMap = {};
+    unreadCounts.forEach(u => { unreadMap[String(u._id)] = u.count; });
+    const userMap = {};
+    users.forEach(u => { userMap[String(u._id)] = u; });
+
+    const result = threads
+      .filter(t => lastMsgMap[String(t._id)])
+      .map(t => ({
+        threadId:    String(t._id),
+        topic:       t.topic,
+        topicLabel:  TOPIC_LABELS[t.topic] || t.topic,
+        status:      t.status,
+        user:        userMap[String(t.userId)] || null,
+        lastMessage: lastMsgMap[String(t._id)],
+        unreadCount: unreadMap[String(t._id)] || 0,
+      }));
+
+    res.json({ threads: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to load threads' });
+  }
+});
+
+// GET /admin/support/thread/:threadId — load full message history
+router.get('/thread/:threadId', async (req, res) => {
+  try {
+    const thread = await SupportThread.findById(req.params.threadId).lean();
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    const messages = await SupportMessage.find({ threadId: thread._id })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    await SupportMessage.updateMany(
+      { threadId: thread._id, from: 'user', readBySupport: false },
+      { $set: { readBySupport: true } }
+    );
+
+    const user = await User.findById(thread.userId)
+      .select('username displayName avatar email')
+      .lean();
+
+    res.json({
+      messages,
+      user,
+      thread: { ...thread, topicLabel: TOPIC_LABELS[thread.topic] || thread.topic },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to load thread' });
+  }
+});
+
+// POST /admin/support/thread/:threadId/reply — send reply
+router.post('/thread/:threadId/reply', upload.support.array('support', 5), async (req, res) => {
+  try {
+    const thread = await SupportThread.findById(req.params.threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    const body        = (req.body.body || '').trim().slice(0, 2000);
+    const attachments = (req.files || []).map(f => '/uploads/support/' + f.filename);
+
+    if (!body && attachments.length === 0) {
+      return res.status(400).json({ error: 'Message cannot be empty' });
+    }
+
+    const user = await User.findById(thread.userId).select('email supportFirstReplyEmailSent');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const msg = await SupportMessage.create({
+      threadId:      thread._id,
+      userId:        thread.userId,
+      from:          'support',
+      body,
+      attachments,
+      readByUser:    false,
+      readBySupport: true,
+    });
+
+    await SupportThread.findByIdAndUpdate(thread._id, { updatedAt: new Date() });
+
+    if (!user.supportFirstReplyEmailSent) {
+      const resend = getResend();
+      if (resend) {
+        try {
+          await resend.emails.send({
+            from:    FROM_EMAIL,
+            to:      user.email.value,
+            subject: 'Support has replied to your message',
+            html: `<p style="font-family:sans-serif">Our support team has responded to your message on AllThingsAprons.</p><p style="font-family:sans-serif"><a href="${process.env.APP_URL || 'http://localhost:3000'}/contact" style="color:#c45c7a">View the message</a></p>`,
+          });
+        } catch (emailErr) {
+          console.error('Support reply email failed:', emailErr.message);
+        }
+      }
+      await User.findByIdAndUpdate(thread.userId, { supportFirstReplyEmailSent: true });
+    }
+
+    res.json({ message: msg });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to send reply' });
+  }
+});
+
+// PATCH /admin/support/thread/:threadId/close — close a thread
+router.patch('/thread/:threadId/close', async (req, res) => {
+  try {
+    const thread = await SupportThread.findByIdAndUpdate(
+      req.params.threadId,
+      { status: 'closed' },
+      { new: true }
+    );
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to close thread' });
+  }
+});
+
+return router;
+}
+
+// ── Job applications ──────────────────────────────────────────────────────
+function applicationsRoutes() {
+const express          = require('express');
+const router           = express.Router();
+const crypto           = require('crypto');
+const bcrypt           = require('bcrypt');
+const { Resend }       = require('resend');
+const AdminApplication = require('../models/AdminApplication');
+const User             = require('../models/User');
+
+const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@allthingsaprons.com';
+const BASE_URL   = process.env.APP_URL    || `http://localhost:${process.env.PORT || 3000}`;
+
+const TIER          = { user: 0, moderator: 1, supervisor: 2, superadmin: 3, founder: 4 };
+const VALID_PERMS   = ['content', 'chat', 'comments', 'financial', 'support'];
+const TIER_LABELS   = { moderator: 'Moderator', supervisor: 'Supervisor', superadmin: 'Super Admin' };
+
+function getResend() {
+  if (!process.env.RESEND_API_KEY) return null;
+  return new Resend(process.env.RESEND_API_KEY);
+}
+
+// GET / — list all applications
+router.get('/', async (req, res) => {
+  const filter = req.query.status ? { status: req.query.status } : {};
+  const applications = await AdminApplication.find(filter).sort({ createdAt: -1 }).lean();
+  res.render('admin/applications/index', {
+    title:        'Applications',
+    currentPage:  'applications',
+    applications,
+    statusFilter: req.query.status || '',
+    hired:        req.query.hired === '1',
+  });
+});
+
+// GET /:id — application detail
+router.get('/:id', async (req, res) => {
+  const application = await AdminApplication.findById(req.params.id).lean();
+  if (!application) return res.redirect('/admin/applications');
+  res.render('admin/applications/detail', {
+    title:       application.name,
+    currentPage: 'applications',
+    application,
+    granterRole: req.session.adminRole,
+    error:       req.query.error || null,
+  });
+});
+
+// POST /:id/status — mark reviewed or rejected
+router.post('/:id/status', async (req, res) => {
+  const { status } = req.body;
+  if (!['reviewed', 'rejected'].includes(status)) return res.redirect('/admin/applications');
+  await AdminApplication.findByIdAndUpdate(req.params.id, { status });
+  res.redirect('/admin/applications/' + req.params.id);
+});
+
+// POST /:id/hire — create account + send invite
+router.post('/:id/hire', async (req, res) => {
+  const application = await AdminApplication.findById(req.params.id);
+  if (!application) return res.redirect('/admin/applications');
+  if (application.status === 'hired') return res.redirect('/admin/applications/' + req.params.id);
+
+  const granterRole = req.session.adminRole;
+  const granterTier = TIER[granterRole] || 0;
+
+  const { role } = req.body;
+  const rawPerms  = req.body.permissions || [];
+  const perms     = Array.isArray(rawPerms) ? rawPerms : [rawPerms];
+  const isTemporary   = req.body.isTemporary === 'on';
+  const temporaryUntil = isTemporary && req.body.temporaryUntil ? new Date(req.body.temporaryUntil) : undefined;
+
+  const targetTier = TIER[role] || 0;
+  if (!(role in TIER) || role === 'user' || role === 'founder') {
+    return res.redirect('/admin/applications/' + req.params.id + '?error=Invalid+role');
+  }
+  if (granterTier - targetTier < 2) {
+    return res.redirect('/admin/applications/' + req.params.id + '?error=Insufficient+authority+to+assign+this+role');
+  }
+
+  const filteredPerms = perms.filter(p => VALID_PERMS.includes(p));
+  if (role === 'moderator' && filteredPerms.length !== 1) {
+    return res.redirect('/admin/applications/' + req.params.id + '?error=Moderators+must+have+exactly+1+permission');
+  }
+  if (role === 'supervisor' && filteredPerms.length < 1) {
+    return res.redirect('/admin/applications/' + req.params.id + '?error=Supervisors+must+have+at+least+1+permission');
+  }
+  const finalPerms = role === 'superadmin' ? [] : filteredPerms;
+
+  const existing = await User.findOne({ 'email.value': application.email });
+  if (existing) {
+    return res.redirect('/admin/applications/' + req.params.id + '?error=An+account+with+this+email+already+exists');
+  }
+
+  try {
+    const token          = crypto.randomBytes(32).toString('hex');
+    const inviteExpiry   = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const placeholderPwd = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
+    const now            = new Date();
+
+    await User.create({
+      password:         placeholderPwd,
+      role,
+      permissions:      finalPerms,
+      accountStatus:    'invited',
+      isTemporary,
+      temporaryUntil,
+      adminInviteToken:  token,
+      adminInviteExpiry: inviteExpiry,
+      email: {
+        value:     application.email,
+        confirmed: true,
+        history:   [{ value: application.email, setAt: now, source: 'admin-hire' }],
+      },
+    });
+
+    await AdminApplication.findByIdAndUpdate(req.params.id, { status: 'hired' });
+
+    const resend = getResend();
+    if (resend) {
+      try {
+        const inviteUrl  = `${BASE_URL}/admin/accept-invite?token=${token}`;
+        const roleLabel  = TIER_LABELS[role] || role;
+        await resend.emails.send({
+          from:    FROM_EMAIL,
+          to:      application.email,
+          subject: "You've been invited to join the ATA Admin team",
+          html: `<p style="font-family:sans-serif">Hi ${application.name},</p><p style="font-family:sans-serif">You've been selected to join the AllThingsAprons admin team as a <strong>${roleLabel}</strong>.</p><p style="font-family:sans-serif">Click the link below to set up your account. This link expires in 72 hours.</p><p><a href="${inviteUrl}" style="font-family:sans-serif;color:#f59e0b">Set up your account →</a></p><p style="font-family:sans-serif;color:#6b7280;font-size:13px">If you weren't expecting this, you can ignore this email.</p>`,
+        });
+      } catch (emailErr) {
+        console.error('Invite email failed:', emailErr.message);
+      }
+    }
+
+    res.redirect('/admin/applications?hired=1');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin/applications/' + req.params.id + '?error=Failed+to+create+account');
+  }
+});
+
+return router;
+}
+
+// ── Log-in, dashboard, users, moderation, announcements and settings ──────
+function adminRoutes() {
 const express        = require('express');
 const router         = express.Router();
 const mongoose       = require('mongoose');
@@ -8,7 +425,7 @@ const SupportMessage = require('../models/SupportMessage');
 const AdminAuditLog  = require('../models/AdminAuditLog');
 const isAdmin        = require('../middleware/isAdmin');
 const requireDomain  = require('../middleware/requireDomain');
-const logAuditEvent  = require('../utils/auditLog');
+const logAuditEvent  = require('../services/auditLog');
 const BannedEmail    = require('../models/BannedEmail');
 const BannedDocHash  = require('../models/BannedDocHash');
 const Announcement            = require('../models/Announcement');
@@ -33,7 +450,7 @@ const TournamentJury           = require('../models/TournamentJury');
 const TournamentComment        = require('../models/TournamentComment');
 const TournamentCommentReport  = require('../models/TournamentCommentReport');
 const TournamentReport         = require('../models/TournamentReport');
-const { cancelTournament }     = require('../jobs/tournamentJobs');
+const { cancelTournament }     = require('../services/jobs/tournamentJobs');
 const upload         = require('../middleware/upload');
 
 router.get('/login', (req, res) => {
@@ -142,10 +559,10 @@ router.use(async (req, res, next) => {
 
 router.use('/verification', requireDomain('content'));
 router.use('/content',      requireDomain('content'));
-router.use('/profile',      require('./adminProfile'));
-router.use('/support',      requireDomain('support'), require('./adminSupport'));
+router.use('/profile',      profileRoutes());
+router.use('/support',      requireDomain('support'), supportRoutes());
 router.use('/admins',       requireDomain(null));
-router.use('/applications', requireDomain(null), require('./adminApplications'));
+router.use('/applications', requireDomain(null), applicationsRoutes());
 
 // ── Role impersonation (founder only) ────────────────────────────
 
@@ -1071,7 +1488,7 @@ router.post('/moderation/entry-reports/:eid/reject', async (req, res) => {
         contestantUserIds.map(uid => ({ userId: uid, type: 'contest_resumed', payload, read: false })),
         { ordered: false }
       );
-      const notifyLoopedIn = require('../utils/notifyLoopedIn');
+      const notifyLoopedIn = require('../services/notifyLoopedIn');
       await notifyLoopedIn(contest._id, 'contest_resumed', payload, contestantUserIds);
     }
   } catch (err) {
@@ -1093,7 +1510,7 @@ router.post('/moderation/entry-reports/:eid/approve', async (req, res) => {
       'entries.entryId': entry._id,
     }).select('_id entries').lean();
 
-    const notifyLoopedIn = require('../utils/notifyLoopedIn');
+    const notifyLoopedIn = require('../services/notifyLoopedIn');
 
     for (const contest of activeContests) {
       await Contest.updateOne({ _id: contest._id }, {
@@ -1508,5 +1925,70 @@ router.post('/settings/entry-report-thresholds', async (req, res) => {
   );
   res.redirect('/admin/settings?flash=saved');
 });
+
+return router;
+}
+
+const router = adminRoutes();
+
+router.routes = [
+  { method: 'GET', path: '/login', label: 'Admin log-in page' },
+  { method: 'POST', path: '/login', label: 'Admin log in' },
+  { method: 'POST', path: '/logout', label: 'Admin log out' },
+  { method: 'GET', path: '/accept-invite', label: 'Set up an invited admin account' },
+  { method: 'POST', path: '/accept-invite', label: 'Set a password from an invite' },
+  { method: 'GET', path: '/profile', label: 'Own admin profile' },
+  { method: 'POST', path: '/profile/display-name', label: 'Change own display name' },
+  { method: 'POST', path: '/profile/avatar', label: 'Change own avatar' },
+  { method: 'POST', path: '/profile/password', label: 'Change own password' },
+  { method: 'GET', path: '/support', label: 'Support inbox' },
+  { method: 'GET', path: '/support/threads', label: 'Support thread list' },
+  { method: 'GET', path: '/support/thread/:threadId', label: 'One support thread' },
+  { method: 'POST', path: '/support/thread/:threadId/reply', label: 'Reply to a support thread' },
+  { method: 'PATCH', path: '/support/thread/:threadId/close', label: 'Close a support thread' },
+  { method: 'GET', path: '/applications', label: 'Job applications' },
+  { method: 'GET', path: '/applications/:id', label: 'One job application' },
+  { method: 'POST', path: '/applications/:id/status', label: 'Set an application status' },
+  { method: 'POST', path: '/applications/:id/hire', label: 'Hire an applicant' },
+  { method: 'POST', path: '/impersonate', label: 'View the panel as another role' },
+  { method: 'POST', path: '/impersonate/exit', label: 'Stop viewing as another role' },
+  { method: 'GET', path: '/', label: 'Dashboard' },
+  { method: 'GET', path: '/users', label: 'Users' },
+  { method: 'GET', path: '/users/:id', label: 'One user' },
+  { method: 'POST', path: '/users/:id/flags', label: 'Add a flag to a user' },
+  { method: 'DELETE', path: '/users/:id/flags/:key', label: 'Remove a flag from a user' },
+  { method: 'GET', path: '/admins', label: 'Admin accounts' },
+  { method: 'POST', path: '/users/:id/role', label: 'Change a user role' },
+  { method: 'POST', path: '/users/:id/password', label: 'Reset a user password' },
+  { method: 'GET', path: '/verification', label: 'ID check queue' },
+  { method: 'GET', path: '/verification/:id', label: 'Review an ID check' },
+  { method: 'POST', path: '/verification/:id/approve', label: 'Approve an ID check' },
+  { method: 'POST', path: '/verification/:id/reject', label: 'Reject an ID check' },
+  { method: 'GET', path: '/tournaments', label: 'Tournaments' },
+  { method: 'GET', path: '/tournaments/:id', label: 'One tournament' },
+  { method: 'POST', path: '/tournaments/:id/cancel', label: 'Cancel a tournament' },
+  { method: 'GET', path: '/audit-log', label: 'Audit log' },
+  { method: 'GET', path: '/moderation', label: 'Moderation queue' },
+  { method: 'POST', path: '/moderation/comment-reports/:id/approve', label: 'Uphold a comment report' },
+  { method: 'POST', path: '/moderation/comment-reports/:id/reject', label: 'Reject a comment report' },
+  { method: 'POST', path: '/moderation/entry-reports/:eid/reject', label: 'Reject an entry report' },
+  { method: 'POST', path: '/moderation/entry-reports/:eid/approve', label: 'Uphold an entry report' },
+  { method: 'POST', path: '/moderation/user-reports/:uid/dismiss', label: 'Dismiss a user report' },
+  { method: 'POST', path: '/moderation/tournament-reports/:tid/dismiss', label: 'Dismiss a tournament report' },
+  { method: 'GET', path: '/content', label: 'Entries' },
+  { method: 'POST', path: '/content/:id/hide', label: 'Take an entry down' },
+  { method: 'POST', path: '/content/:id/unhide', label: 'Put an entry back' },
+  { method: 'GET', path: '/announcements', label: 'Announcements' },
+  { method: 'POST', path: '/announcements', label: 'Create an announcement' },
+  { method: 'GET', path: '/announcements/:id', label: 'One announcement' },
+  { method: 'GET', path: '/announcements/:id/edit', label: 'Edit an announcement' },
+  { method: 'POST', path: '/announcements/:id/edit', label: 'Save an announcement' },
+  { method: 'POST', path: '/announcements/:id/activate', label: 'Publish an announcement' },
+  { method: 'POST', path: '/announcements/:id/expire', label: 'End an announcement' },
+  { method: 'POST', path: '/announcements/:id/delete', label: 'Delete an announcement' },
+  { method: 'GET', path: '/settings', label: 'Platform settings' },
+  { method: 'POST', path: '/settings/contest-eligibility', label: 'Save contest eligibility limits' },
+  { method: 'POST', path: '/settings/entry-report-thresholds', label: 'Save entry report limits' },
+];
 
 module.exports = router;

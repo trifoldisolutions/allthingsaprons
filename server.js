@@ -5,21 +5,7 @@ const session = require('express-session');
 const { MongoStore } = require('connect-mongo');
 require('dotenv').config({ quiet: true });
 
-const pagesRouter      = require('./routes/pages');
-const apiRouter        = require('./routes/api');
-const adminRouter      = require('./routes/admin');
-const authRouter       = require('./routes/auth');
-const verifyIdentityRouter = require('./routes/verify-identity');
-const contactRouter    = require('./routes/contact');
-const careersRouter    = require('./routes/careers');
-const followRouter     = require('./routes/follow');
-const messagesRouter   = require('./routes/messages');
-const notificationsRouter = require('./routes/notifications');
-const walletRouter     = require('./routes/wallet');
-const exploreRouter    = require('./routes/explore');
-const tournamentsRouter = require('./routes/tournaments');
-const injectNotificationCount = require('./middleware/injectNotificationCount');
-const injectRightPanelData    = require('./middleware/injectRightPanelData');
+const appRoutes = require('./routes/app');
 
 require('./models/TournamentGroup');
 require('./models/TournamentMatch');
@@ -32,7 +18,6 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/assets', express.static(path.join(__dirname, 'assets')));
 app.use(session({
   name: 'ata.sid',
   secret: process.env.SESSION_SECRET || 'dev-secret',
@@ -45,19 +30,17 @@ app.use(session({
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-app.use('/', authRouter);
-app.use('/verify-identity', verifyIdentityRouter);
-app.use('/contact', contactRouter);
-app.use('/careers', careersRouter);
-app.use('/admin', adminRouter);
-app.use('/', followRouter);
-app.use('/wallet', injectNotificationCount, injectRightPanelData, walletRouter);
-app.use('/messages', injectNotificationCount, injectRightPanelData, messagesRouter);
-app.use('/notifications', injectNotificationCount, injectRightPanelData, notificationsRouter);
-app.use('/', injectNotificationCount, injectRightPanelData, exploreRouter);
-app.use('/', injectNotificationCount, injectRightPanelData, tournamentsRouter);
-app.use('/', injectNotificationCount, injectRightPanelData, pagesRouter);
-app.use('/api', apiRouter);
+// Facades. The order is part of how the app behaves: the App router starts with a sign-in gate on every
+// path, so what logged-out visitors can reach goes before it, and the API sits after it, behind the gate.
+const facades = [
+  { name: 'Sign-in', mount: '/', router: appRoutes.signIn },
+  { name: 'Public', mount: '/', router: require('./routes/public') },
+  { name: 'Admin', mount: '/admin', router: require('./routes/admin') },
+  { name: 'App', mount: '/', router: appRoutes },
+  { name: 'API', mount: '/api', router: require('./routes/api') },
+];
+
+facades.forEach(({ mount, router }) => app.use(mount, router));
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/allthingsaprons';
 
@@ -65,11 +48,11 @@ mongoose
   .connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
-    const agenda                  = require('./jobs/agenda');
-    const { registerContestJobs } = require('./jobs/contestJobs');
-    const { startSweeper }        = require('./jobs/sweeper');
-    const { registerWalletJobs, startWalletJobs } = require('./jobs/walletJobs');
-    const { registerTournamentJobs } = require('./jobs/tournamentJobs');
+    const agenda                  = require('./services/jobs/agenda');
+    const { registerContestJobs } = require('./services/jobs/contestJobs');
+    const { startSweeper }        = require('./services/jobs/sweeper');
+    const { registerWalletJobs, startWalletJobs } = require('./services/jobs/walletJobs');
+    const { registerTournamentJobs } = require('./services/jobs/tournamentJobs');
     registerContestJobs(agenda);
     registerWalletJobs(agenda);
     registerTournamentJobs(agenda);
@@ -89,5 +72,14 @@ mongoose
   .catch((err) => console.warn('MongoDB unavailable — running without DB:', err.message));
 
 app.listen(PORT, () => {
-  console.log(`Server running → http://localhost:${PORT}`);
+  const local = `http://localhost:${PORT}`;
+  console.log(`Server running → ${local}`);
+  facades.forEach(({ name, mount, router }) => {
+    console.log(`[${name}]`);
+    (router.routes || []).forEach(({ method, path: p, label }) => {
+      const full = (mount === '/' ? '' : mount) + (p === '/' && mount !== '/' ? '' : p);
+      console.log(`  ${method.padEnd(6)} ${local}${full || '/'} — ${label}`);
+    });
+  });
+  console.log('');
 });

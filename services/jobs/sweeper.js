@@ -1,7 +1,7 @@
-const Contest              = require('../models/Contest');
-const Tournament           = require('../models/Tournament');
-const TournamentMatch      = require('../models/TournamentMatch');
-const TournamentGroup      = require('../models/TournamentGroup');
+const Contest              = require('../../models/Contest');
+const Tournament           = require('../../models/Tournament');
+const TournamentMatch      = require('../../models/TournamentMatch');
+const TournamentGroup      = require('../../models/TournamentGroup');
 const { voidExpiredContest, closeContest } = require('./contestJobs');
 
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
@@ -79,7 +79,7 @@ async function sweepDeadline(agenda, { Model, filter, deadlineField, jobName, da
 
 // Recovery net for the four tournament-side one-time agenda jobs — mirrors runVoidSweeper/
 // runCloseSweeper above. Each one-time job is already scheduled directly (at tournament
-// creation, cooldown transition, or tie kickoff) via jobs/tournamentJobs.js, but this covers
+// creation, cooldown transition, or tie kickoff) via services/jobs/tournamentJobs.js, but this covers
 // the case where that scheduled job doc was somehow lost (e.g. a redeploy that wiped the
 // agenda collection) by reading the deadline straight off the source-of-truth document.
 async function runTournamentSweeper(agenda) {
@@ -129,7 +129,7 @@ async function runTournamentSweeper(agenda) {
   });
 }
 
-// Recovery for jobs/contestJobs.js's fire-and-forget tournament hook: if the process
+// Recovery for services/jobs/contestJobs.js's fire-and-forget tournament hook: if the process
 // crashed/restarted between a tournament Contest closing and handleTournamentMatchClose
 // finishing, the TournamentMatch is left stranded (still 'scheduled'/'active') even though
 // its Contest already has a final status. Re-run the hook for any such match.

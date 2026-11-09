@@ -45,9 +45,9 @@ const WalletTransaction = require('../models/WalletTransaction');
 const {
   tournamentOpenExpiry, tournamentCooldownExpiry, closeTournament,
   tournamentGroupJuryExpiry, tournamentGroupOrganizerVoteExpiry,
-} = require('../jobs/tournamentJobs');
-const { closeContest } = require('../jobs/contestJobs');
-const notifyEntryLoopedIn = require('../utils/tournamentEntryLoop');
+} = require('../services/jobs/tournamentJobs');
+const { closeContest } = require('../services/jobs/contestJobs');
+const notifyEntryLoopedIn = require('../services/tournamentEntryLoop');
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/allthingsaprons';
 const BASE_URL  = `http://localhost:${process.env.PORT || 3001}`;
@@ -110,7 +110,7 @@ async function poll(fn, { timeoutMs = 5000, intervalMs = 100, label = 'condition
 
 // Job functions we call directly (transitionToCooldown, generateGroupMatches,
 // generateKnockoutBracket, createBracketMatch, cancelTournament, ...) schedule agenda jobs
-// internally via a lazy `require('../jobs/agenda')`. Agenda connects to Mongo asynchronously in
+// internally via a lazy `require('../services/jobs/agenda')`. Agenda connects to Mongo asynchronously in
 // its constructor — scheduling before that connection is up throws "Cannot read properties of
 // undefined (reading 'insertOne')". Cached as a module-level singleton promise rather than a
 // fresh `agenda.once('ready', ...)` registration every call: agenda's 'ready' event fires exactly
@@ -120,7 +120,7 @@ async function poll(fn, { timeoutMs = 5000, intervalMs = 100, label = 'condition
 let agendaReadyPromise = null;
 function ensureAgendaReady() {
   if (!agendaReadyPromise) {
-    const agenda = require('../jobs/agenda');
+    const agenda = require('../services/jobs/agenda');
     agendaReadyPromise = new Promise((resolve, reject) => {
       agenda.once('ready', resolve);
       agenda.once('error', reject);
@@ -130,7 +130,7 @@ function ensureAgendaReady() {
 }
 
 // ---------------------------------------------------------------------------- seeding helpers ---
-// Matches the signup route's username rule (routes/auth.js) exactly: starts with a letter,
+// Matches the signup route's username rule (routes/app.js) exactly: starts with a letter,
 // letters/digits only, 3-15 chars total. That leaves no room for the "__sim_" cleanup tag, so
 // the tag lives on the email instead (see cleanup(), which matches on email, not username).
 const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9]{2,14}$/;
@@ -183,7 +183,7 @@ async function seedOrganizerEligibility(userId, { followerCount = 260, contribut
   if (contribDocs.length) await ContestContribution.insertMany(contribDocs);
 }
 
-// Replicates the `open_tournament_match` agenda job body (jobs/tournamentJobs.js) — that job
+// Replicates the `open_tournament_match` agenda job body (services/jobs/tournamentJobs.js) — that job
 // has no exported standalone function, unlike every other tournament job handler, so a
 // deadline-driven round can't be forced without duplicating its logic here. See the simulation
 // report (dev_resources/plans/July/tournament-simulation-report.md, section 5) for the writeup of this gap.
@@ -288,7 +288,7 @@ function bucketByRound(matches, activeAt) {
   return Object.keys(byRound).map(Number).sort((a, b) => a - b).map(k => byRound[k]);
 }
 
-// Mirrors routes/tournaments.js's own GROUP_CONFIG — the fixed size->group shape table. Needed
+// Mirrors routes/app.js's own GROUP_CONFIG — the fixed size->group shape table. Needed
 // here so the boundary-sizes scenario (size 4 and size 12) can compute expected group/knockout
 // counts instead of the hardcoded "2 groups / 12 matches" assumptions built for size 8.
 const GROUP_CONFIG = {
@@ -1671,7 +1671,7 @@ async function runKnockoutTieScenario() {
 
   log('\n=== Phase 13: Verifying tournament_knockout_started actually renders on /notifications ===');
   // Every earlier scenario only confirmed the Notification document was created and that
-  // views/notifications.ejs has a `case 'tournament_knockout_started'` (via a code read) — never
+  // views/app/notifications.ejs has a `case 'tournament_knockout_started'` (via a code read) — never
   // that it renders correctly in a live response. Fetch the real page as an actual recipient.
   const knockoutNotif = await Notification.findOne({ type: 'tournament_knockout_started', 'payload.tournamentId': tournament._id }).lean();
   if (!knockoutNotif) {
@@ -1988,7 +1988,7 @@ async function runSocialLayerScenario() {
   if (reply1.parentId?.toString() !== c1._id.toString()) flag(`Expected the first reply's parentId to be the top-level comment, got ${reply1.parentId}`);
 
   // Replying to a reply must re-parent to the ORIGINAL top-level comment, keeping nesting at
-  // exactly one level (routes/tournaments.js's `effectiveParentId` logic).
+  // exactly one level (routes/app.js's `effectiveParentId` logic).
   r = await httpReq(bystander3Actor, 'POST', `/tournament/${tournament._id}/comments`, { body: { body: 'Replying to a reply', parentId: reply1._id.toString() } });
   if (r.status !== 200) throw new Error(`Reply-to-reply post failed: ${r.status} ${await r.text()}`);
   const reply2 = await r.json();
@@ -2134,7 +2134,7 @@ async function runSocialLayerScenario() {
   }
 
   log('\n=== Phase 12: Profile trophy counters — verifying the underlying data condition ===');
-  // routes/pages.js computes firstPrizes/secondPrizes/thirdPrizes from exactly these
+  // routes/app.js computes firstPrizes/secondPrizes/thirdPrizes from exactly these
   // eliminated/knockoutRound combinations — verified directly against the just-closed
   // tournament's real placements rather than scraping the rendered profile HTML.
   const finalMatch = await TournamentMatch.findOne({ tournamentId: tournament._id, knockoutRound: 'Final' }).lean();
@@ -2152,7 +2152,7 @@ async function runSocialLayerScenario() {
   if (!secondDoc.eliminated || secondDoc.knockoutRound !== 'Final') flag(`2nd place should satisfy "eliminated && knockoutRound===Final" (secondPrizes++), got eliminated=${secondDoc.eliminated} knockoutRound=${secondDoc.knockoutRound}`);
   if (thirdDoc.eliminated || thirdDoc.knockoutRound !== '3rd') flag(`3rd place should satisfy "!eliminated && knockoutRound===3rd" (thirdPrizes++), got eliminated=${thirdDoc.eliminated} knockoutRound=${thirdDoc.knockoutRound}`);
   if (!firstDoc.eliminated && firstDoc.knockoutRound === 'Final' && secondDoc.eliminated && secondDoc.knockoutRound === 'Final' && !thirdDoc.eliminated && thirdDoc.knockoutRound === '3rd') {
-    log('  All three placements satisfy exactly the data condition routes/pages.js reads for firstPrizes/secondPrizes/thirdPrizes.');
+    log('  All three placements satisfy exactly the data condition routes/app.js reads for firstPrizes/secondPrizes/thirdPrizes.');
   }
 
   // Sanity-check the winner's profile page still renders (200) with this tournament placement
@@ -2243,7 +2243,7 @@ async function runOrphanedEntryCrashScenario() {
 
 // ------------------------------------------------------------------ scenario: concurrent-closes ---
 // Every other scenario in this report closes matches strictly one at a time, so the atomic-claim
-// guards scattered through jobs/tournamentJobs.js (`findOneAndUpdate` status-transition claims,
+// guards scattered through services/jobs/tournamentJobs.js (`findOneAndUpdate` status-transition claims,
 // specifically meant to survive two callers racing) have never actually been contended by two
 // simultaneous callers. This scenario deliberately fires two closeContest() calls concurrently
 // (via Promise.all, not sequentially) at the two points in the pipeline where a real race is

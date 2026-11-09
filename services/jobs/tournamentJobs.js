@@ -1,16 +1,16 @@
-const Tournament      = require('../models/Tournament');
-const TournamentEntry = require('../models/TournamentEntry');
-const TournamentGroup = require('../models/TournamentGroup');
-const TournamentJury  = require('../models/TournamentJury');
-const TournamentJuryVote = require('../models/TournamentJuryVote');
-const TournamentGroupTieVote = require('../models/TournamentGroupTieVote');
-const TournamentMatch = require('../models/TournamentMatch');
-const Contest         = require('../models/Contest');
-const ContestVote     = require('../models/ContestVote');
-const Notification    = require('../models/Notification');
-const User            = require('../models/User');
-const { creditWallet } = require('../utils/wallet');
-const notifyEntryLoopedIn = require('../utils/tournamentEntryLoop');
+const Tournament      = require('../../models/Tournament');
+const TournamentEntry = require('../../models/TournamentEntry');
+const TournamentGroup = require('../../models/TournamentGroup');
+const TournamentJury  = require('../../models/TournamentJury');
+const TournamentJuryVote = require('../../models/TournamentJuryVote');
+const TournamentGroupTieVote = require('../../models/TournamentGroupTieVote');
+const TournamentMatch = require('../../models/TournamentMatch');
+const Contest         = require('../../models/Contest');
+const ContestVote     = require('../../models/ContestVote');
+const Notification    = require('../../models/Notification');
+const User            = require('../../models/User');
+const { creditWallet } = require('../wallet');
+const notifyEntryLoopedIn = require('../tournamentEntryLoop');
 
 const MIN_JURY = 5;
 
@@ -78,7 +78,7 @@ async function activateTournament(tournamentId) {
   );
   if (!tournament) return; // already activated/canceled by a concurrent call
 
-  const { generateGroups, generateGroupMatches } = require('../utils/tournamentScheduler');
+  const { generateGroups, generateGroupMatches } = require('../tournamentScheduler');
   const groups = await generateGroups(tournament._id);
   for (const group of groups) {
     await generateGroupMatches(group._id);
@@ -196,7 +196,7 @@ async function resolveJuryVote(matchId, votes) {
   await handleTournamentMatchClose(match.contestId, winnerEntryId);
 }
 
-// Fired (fire-and-forget) from jobs/contestJobs.js's closeContest whenever a closing
+// Fired (fire-and-forget) from services/jobs/contestJobs.js's closeContest whenever a closing
 // Contest has a tournamentId. Records the result onto TournamentMatch/TournamentEntry.
 // A tie hands off to the jury/organizer/coin-flip chain (initiateTieResolution below);
 // this same function is called again with the eventual winner once that chain resolves.
@@ -677,7 +677,7 @@ async function resolveGroup(groupId) {
     tournamentId: group.tournamentId, status: { $ne: 'complete' },
   });
   if (incompleteGroups === 0) {
-    const { generateKnockoutBracket } = require('../utils/tournamentScheduler');
+    const { generateKnockoutBracket } = require('../tournamentScheduler');
     await generateKnockoutBracket(group.tournamentId);
   }
 }
@@ -767,7 +767,7 @@ async function handleKnockoutMatchClose(match) {
 
   // An SF loser still has a 3rd-place match to play — not actually eliminated yet. Every
   // other round's loser (R16/QF/Final/3rd) has no more matches, so mark + notify them now.
-  // (routes/pages.js's prize-placement logic depends on the 3rd-place winner's `eliminated`
+  // (routes/app.js's prize-placement logic depends on the 3rd-place winner's `eliminated`
   // staying false the whole way through, which only holds if SF losers aren't flagged here.)
   if (match.knockoutRound === 'SF') {
     await TournamentEntry.findByIdAndUpdate(loserTEId, { $set: { knockoutRound: match.knockoutRound } });
@@ -1066,7 +1066,7 @@ function registerTournamentJobs(agenda) {
 
     const votingDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await Contest.findByIdAndUpdate(match.contestId, { $set: { status: 'active', votingDeadline } });
-    // No explicit close_contest scheduling — the existing 15-min sweeper (jobs/sweeper.js)
+    // No explicit close_contest scheduling — the existing 15-min sweeper (services/jobs/sweeper.js)
     // picks up any active contest nearing its votingDeadline, same as every other contest.
 
     const [entryA, entryB] = await Promise.all([

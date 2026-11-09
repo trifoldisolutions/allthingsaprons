@@ -114,7 +114,7 @@ async function generateGroupMatches(groupId) {
       });
 
       if (!isFirstRound) {
-        const agenda = require('../jobs/agenda');
+        const agenda = require('./jobs/agenda');
         await agenda.schedule(scheduledAt, 'open_tournament_match', { matchId: match._id.toString() });
       } else {
         await notifyEntryLoopedIn([
@@ -141,7 +141,7 @@ async function generateGroupMatches(groupId) {
 const KNOCKOUT_ROUND_BY_FIELD_SIZE = { 2: 'Final', 4: 'SF', 8: 'QF', 16: 'R16' };
 
 // Called once every TournamentGroup for a tournament is 'complete' (see resolveGroup in
-// jobs/tournamentJobs.js). Atomically claims the transition so two groups finishing in the
+// services/jobs/tournamentJobs.js). Atomically claims the transition so two groups finishing in the
 // same sweep can't both trigger generation.
 async function generateKnockoutBracket(tournamentId) {
   const tournament = await Tournament.findOneAndUpdate(
@@ -190,7 +190,7 @@ async function generateKnockoutBracket(tournamentId) {
 
   const now            = new Date();
   const votingDeadline  = new Date(now.getTime() + DAY_MS);
-  const agenda          = require('../jobs/agenda');
+  const agenda          = require('./jobs/agenda');
   const notifications   = [];
 
   for (const [A, B] of pairings) {

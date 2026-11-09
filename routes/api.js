@@ -18,11 +18,11 @@ const AnnouncementDismissal   = require('../models/AnnouncementDismissal');
 const AnnouncementImpression  = require('../models/AnnouncementImpression');
 const AnnouncementClick       = require('../models/AnnouncementClick');
 const upload                  = require('../middleware/upload');
-const checkContestEligibility = require('../utils/contestEligibility');
+const checkContestEligibility = require('../services/contestEligibility');
 const ContestLoop              = require('../models/ContestLoop');
 const ContestContribution     = require('../models/ContestContribution');
 const WalletTransaction       = require('../models/WalletTransaction');
-const notifyLoopedIn           = require('../utils/notifyLoopedIn');
+const notifyLoopedIn           = require('../services/notifyLoopedIn');
 const EntryReport             = require('../models/EntryReport');
 const EntryBookmark           = require('../models/EntryBookmark');
 const PlatformSettings        = require('../models/PlatformSettings');
@@ -40,11 +40,11 @@ const TournamentGroupTieVote   = require('../models/TournamentGroupTieVote');
 const {
   activateTournament, autoAcceptPendingJury, MIN_JURY, resolveJuryVote, handleTournamentMatchClose,
   resolveGroupJuryVote, resolveGroupOrganizerVote,
-} = require('../jobs/tournamentJobs');
-const estimateParticipantPool = require('../utils/estimateParticipantPool');
-const { submitEntryToTournament, checkTournamentPreflight, attemptTournamentAutoDraft } = require('../utils/tournamentSubmission');
-const { updateAffinity, updateCreatorAffinity, updateStainAffinity, SIGNAL_ANNOUNCEMENT_DISMISS, SIGNAL_ANNOUNCEMENT_CLICK } = require('../utils/affinityUpdater');
-const { getPeopleSubSections }         = require('./explore');
+} = require('../services/jobs/tournamentJobs');
+const estimateParticipantPool = require('../services/estimateParticipantPool');
+const { submitEntryToTournament, checkTournamentPreflight, attemptTournamentAutoDraft } = require('../services/tournamentSubmission');
+const { updateAffinity, updateCreatorAffinity, updateStainAffinity, SIGNAL_ANNOUNCEMENT_DISMISS, SIGNAL_ANNOUNCEMENT_CLICK } = require('../services/affinityUpdater');
+const { getPeopleSubSections }         = require('./app');
 
 router.get('/me', (req, res) => {
   res.json({ authenticated: !!req.session.userId });
@@ -304,7 +304,7 @@ router.post('/tournaments/:id/advance-now', async (req, res) => {
     return res.status(400).json({ error: `You need exactly ${tournament.size} approved candidates before starting the tournament.` });
   }
 
-  const agenda = require('../jobs/agenda'); // lazy — must load after mongoose.connect() in server.js
+  const agenda = require('../services/jobs/agenda'); // lazy — must load after mongoose.connect() in server.js
 
   if (tournament.status === 'open') {
     // Mirrors the jury-readiness bar tournament_open_expiry enforces before it would otherwise
@@ -440,7 +440,7 @@ router.post('/tournaments/:id/matches/:matchId/organizer-vote', async (req, res)
   );
   if (!claimed) return res.status(400).json({ error: 'This tie has already been resolved.' });
 
-  const agenda = require('../jobs/agenda'); // lazy — must load after mongoose.connect() in server.js
+  const agenda = require('../services/jobs/agenda'); // lazy — must load after mongoose.connect() in server.js
   await agenda.cancel({ name: 'tournament_organizer_vote_expiry', 'data.matchId': match._id.toString() });
 
   await handleTournamentMatchClose(match.contestId, votedForEntryId);
@@ -2913,5 +2913,70 @@ router.get('/wallet/transactions', async (req, res) => {
 
   res.json({ transactions, total });
 });
+
+router.routes = [
+  { method: 'GET', path: '/feed/entries', label: 'More feed entries' },
+  { method: 'GET', path: '/me', label: 'Signed-in user' },
+  { method: 'GET', path: '/users/search', label: 'Search users' },
+  { method: 'POST', path: '/tournaments/search-users', label: 'Search users while setting up a tournament' },
+  { method: 'GET', path: '/tournaments/check-name', label: 'Check a tournament name is free' },
+  { method: 'POST', path: '/tournaments/estimate-pool', label: 'Estimate the eligible participant pool' },
+  { method: 'GET', path: '/tournaments/:id/eligibility', label: 'Can this user enter the tournament' },
+  { method: 'POST', path: '/tournaments/:id/entries/:eid/approve', label: 'Approve a candidate' },
+  { method: 'POST', path: '/tournaments/:id/entries/:eid/revert', label: 'Undo a candidate decision' },
+  { method: 'POST', path: '/tournaments/:id/advance-now', label: 'Start a tournament early' },
+  { method: 'POST', path: '/tournaments/:id/entries/:eid/reject', label: 'Reject a candidate' },
+  { method: 'POST', path: '/tournaments/:id/matches/:matchId/jury-vote', label: 'Cast a jury vote on a match tie' },
+  { method: 'POST', path: '/tournaments/:id/matches/:matchId/organizer-vote', label: 'Cast the organizer vote on a match tie' },
+  { method: 'POST', path: '/tournaments/:id/groups/:groupId/jury-vote', label: 'Cast a jury vote on a group tie' },
+  { method: 'POST', path: '/tournaments/:id/groups/:groupId/organizer-vote', label: 'Cast the organizer vote on a group tie' },
+  { method: 'GET', path: '/search', label: 'Search everything' },
+  { method: 'GET', path: '/users/:id/entries', label: 'Entries of a user' },
+  { method: 'GET', path: '/users/:id/nomination-eligible', label: 'Can this user be nominated' },
+  { method: 'POST', path: '/contests/viewer-nominate', label: 'Viewer nominates a contest' },
+  { method: 'GET', path: '/users/lookup', label: 'Look up a user' },
+  { method: 'GET', path: '/has-user', label: 'Does an account exist' },
+  { method: 'GET', path: '/check-signup', label: 'Check a sign-up email and username' },
+  { method: 'POST', path: '/entries', label: 'Create an entry' },
+  { method: 'POST', path: '/nominations/:id/accept', label: 'Accept a nomination' },
+  { method: 'POST', path: '/nominations/:id/decline', label: 'Decline a nomination' },
+  { method: 'POST', path: '/contests/challenge', label: 'Challenge a user to a contest' },
+  { method: 'GET', path: '/profile/:username/entries', label: 'Entries on a profile' },
+  { method: 'POST', path: '/entries/:id/pin', label: 'Pin an entry' },
+  { method: 'PATCH', path: '/entries/:id', label: 'Edit an entry' },
+  { method: 'POST', path: '/entries/:eid/rate', label: 'Rate an entry' },
+  { method: 'POST', path: '/contests/:id/vote', label: 'Vote in a contest' },
+  { method: 'DELETE', path: '/contests/:id', label: 'Delete a contest' },
+  { method: 'DELETE', path: '/contests/:id/vote', label: 'Take back a contest vote' },
+  { method: 'POST', path: '/contests/:id/forfeit', label: 'Forfeit a contest' },
+  { method: 'PATCH', path: '/entries/:id/allow-take-ons', label: 'Turn take-ons on or off for an entry' },
+  { method: 'POST', path: '/entries/:id/take-on', label: 'Take on an entry' },
+  { method: 'POST', path: '/nominations/:id/take-on-accept', label: 'Accept a take-on' },
+  { method: 'POST', path: '/contests/:id/loop-in', label: 'Loop in to a contest' },
+  { method: 'POST', path: '/entries/:id/bookmark', label: 'Bookmark an entry' },
+  { method: 'POST', path: '/contests/:id/comments', label: 'Comment on a contest' },
+  { method: 'PATCH', path: '/contests/:id/comments/:cid', label: 'Edit a contest comment' },
+  { method: 'DELETE', path: '/contests/:id/comments/:cid', label: 'Delete a contest comment' },
+  { method: 'POST', path: '/contests/:id/comments/:cid/report', label: 'Report a contest comment' },
+  { method: 'POST', path: '/contests/:id/comments/:cid/react', label: 'React to a contest comment' },
+  { method: 'GET', path: '/similar-accounts/:username', label: 'Followers and following of a profile' },
+  { method: 'POST', path: '/entries/:eid/comments', label: 'Comment on an entry' },
+  { method: 'PATCH', path: '/entries/:eid/comments/:cid', label: 'Edit an entry comment' },
+  { method: 'DELETE', path: '/entries/:eid/comments/:cid', label: 'Delete an entry comment' },
+  { method: 'POST', path: '/entries/:eid/comments/:cid/report', label: 'Report an entry comment' },
+  { method: 'POST', path: '/entries/:eid/comments/:cid/pin', label: 'Pin an entry comment' },
+  { method: 'POST', path: '/entries/:eid/comments/:cid/react', label: 'React to an entry comment' },
+  { method: 'POST', path: '/entries/:eid/report', label: 'Report an entry' },
+  { method: 'POST', path: '/users/:username/block', label: 'Block a user' },
+  { method: 'POST', path: '/users/:username/report', label: 'Report a user' },
+  { method: 'POST', path: '/users/:username/share', label: 'Record a profile share' },
+  { method: 'POST', path: '/announcements/:id/dismiss', label: 'Dismiss an announcement' },
+  { method: 'POST', path: '/announcements/:id/impression', label: 'Record an announcement view' },
+  { method: 'POST', path: '/announcements/:id/click', label: 'Record an announcement click' },
+  { method: 'POST', path: '/contests/:id/contribute', label: 'Contribute CHL to a contest' },
+  { method: 'PATCH', path: '/contests/:id/contribute/:entryId', label: 'Change a contest contribution' },
+  { method: 'DELETE', path: '/contests/:id/contribute/:entryId', label: 'Withdraw a contest contribution' },
+  { method: 'GET', path: '/wallet/transactions', label: 'Wallet history as JSON' },
+];
 
 module.exports = router;

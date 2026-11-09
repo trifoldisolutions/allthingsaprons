@@ -9,7 +9,7 @@ const MS_PER_DAY  = 1000 * 60 * 60 * 24;
 const YEAR_DAYS   = 365.25;
 const OP_EXPR     = { gte: '$gte', lte: '$lte', eq: '$eq' };
 // Curator-reputation fields — evaluated against the user's profile-wide weighted rating
-// stats (see utils/weightedRating.js), never against the specific entry being submitted.
+// stats (see services/weightedRating.js), never against the specific entry being submitted.
 const RATING_FIELDS = ['ratingAvg', 'ratingCount'];
 const SEX_MAP = { M: ['male'], F: ['female'], NB: ['other', 'prefer-not-to-say'] };
 
@@ -37,7 +37,7 @@ function flip(operator) {
 
 // Estimates how many currently-registered users would satisfy a tournament's eligibility
 // criteria if applied today. ratingAvg/ratingCount gate on the user's profile-wide weighted
-// rating reputation (same formula as utils/weightedRating.js), not any specific entry —
+// rating reputation (same formula as services/weightedRating.js), not any specific entry —
 // every tournament candidate submits a brand-new entry, so per-entry rating history would
 // never be satisfiable otherwise.
 //
@@ -135,10 +135,10 @@ const CRITERIA_OPS = { gte: (a, b) => a >= b, lte: (a, b) => a <= b, eq: (a, b) 
 // Re-checks a single candidate against a tournament's eligibility criteria, reporting exactly
 // which criteria failed. Every criteria field is profile-level (sex/age/accountAgeDays/
 // followerCount/isFollower/entryCount, plus ratingAvg/ratingCount via the user's profile-wide
-// weighted rating stats — see utils/weightedRating.js) — none depend on a specific entry, since
+// weighted rating stats — see services/weightedRating.js) — none depend on a specific entry, since
 // every tournament submission is a brand-new entry with no rating history of its own.
 //
-// `entryId` is optional: pass a real one at actual submission time (utils/tournamentSubmission.js)
+// `entryId` is optional: pass a real one at actual submission time (services/tournamentSubmission.js)
 // to also confirm the entry exists and isn't hidden; omit it for a pre-upload eligibility
 // pre-check where no entry exists yet.
 //
@@ -194,7 +194,7 @@ async function evaluateTournamentCriteria(userId, entryId, organizerId, criteria
   return { eligible: failedCriteria.length === 0, failedCriteria };
 }
 
-// Thin boolean wrapper kept for the organizer edit-flow caller (routes/tournaments.js), which
+// Thin boolean wrapper kept for the organizer edit-flow caller (routes/app.js), which
 // only needs pass/fail, not the breakdown.
 async function meetsTournamentCriteria(userId, entryId, organizerId, criteria) {
   return (await evaluateTournamentCriteria(userId, entryId, organizerId, criteria)).eligible;
